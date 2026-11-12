@@ -1,0 +1,77 @@
+# Два інстанси PostgreSQL 18: primary (таблиця, завдання pg_cron, публікація) і replica (підписка).
+# SQL-скрипти виконуються автоматично при першому запуску (порожній том даних), у порядку номерів.
+
+x-postgres: &postgres
+  build: ./docker
+  image: pg-partitioning-task:18
+  restart: unless-stopped
+
+services:
+  primary:
+    <<: *postgres
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - shared_preload_libraries=pg_cron
+      - -c
+      - cron.database_name=${POSTGRES_DB}
+      - -c
+      - cron.use_background_workers=on
+      - -c
+      - max_worker_processes=16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      REPLICATION_USER: ${REPLICATION_USER}
+      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD}
+    ports:
+      - "${PRIMARY_PORT}:5432"
+    volumes:
+      - primary_data:/var/lib/postgresql
+      - ./sql/01_table.sql:/docker-entrypoint-initdb.d/01_table.sql:ro
+      - ./sql/02_generate_data.sql:/docker-entrypoint-initdb.d/02_generate_data.sql:ro
+      - ./sql/03_unique_guid.sql:/docker-entrypoint-initdb.d/03_unique_guid.sql:ro
+      - ./sql/04_job_insert.sql:/docker-entrypoint-initdb.d/04_job_insert.sql:ro
+      - ./sql/05_job_update.sql:/docker-entrypoint-initdb.d/05_job_update.sql:ro
+      - ./sql/06_matview.sql:/docker-entrypoint-initdb.d/06_matview.sql:ro
+      - ./sql/07_publication.sql:/docker-entrypoint-initdb.d/07_publication.sql:ro
+      - ./sql/09_maintenance_jobs.sql:/docker-entrypoint-initdb.d/09_maintenance_jobs.sql:ro
+    healthcheck:
+      # Через TCP: під час ініціалізації сервер слухає лише unix-сокет,
+      # тому перевірка проходить тільки після виконання всіх скриптів.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  replica:
+    <<: *postgres
+    depends_on:
+      primary:
+        condition: service_healthy
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      REPLICATION_USER: ${REPLICATION_USER}
+      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD}
+      PRIMARY_HOST: primary
+    ports:
+      - "${REPLICA_PORT}:5432"
+    volumes:
+      - replica_data:/var/lib/postgresql
+      - ./sql/01_table.sql:/docker-entrypoint-initdb.d/01_table.sql:ro
+      - ./sql/03_unique_guid.sql:/docker-entrypoint-initdb.d/03_unique_guid.sql:ro
+      - ./sql/08_subscription.sql:/docker-entrypoint-initdb.d/08_subscription.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+volumes:
+  primary_data:
+  replica_data:

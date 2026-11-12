@@ -1,0 +1,6 @@
+.env
+pgdata/
+*.log
+.vscode/
+.idea/
+.vs/
